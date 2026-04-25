@@ -71,6 +71,23 @@ CREATE TABLE IF NOT EXISTS weekly_menu (
     INDEX idx_recipe (recipe_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本周菜单表';
 
+-- 购物清单表
+CREATE TABLE IF NOT EXISTS shopping_items (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL DEFAULT 1 COMMENT '用户ID（暂用默认值1，后续可扩展多用户）',
+    name VARCHAR(100) NOT NULL COMMENT '食材名称',
+    amount DECIMAL(10,2) NOT NULL COMMENT '用量',
+    unit_name VARCHAR(50) NOT NULL COMMENT '单位名称',
+    is_purchased TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已购买',
+    recipe_id INT NULL COMMENT '关联食谱ID（手动添加的项可为NULL）',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL,
+    INDEX idx_user (user_id),
+    INDEX idx_purchased (is_purchased),
+    INDEX idx_recipe (recipe_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='购物清单表';
+
 -- 插入初始分类数据
 INSERT INTO categories (name) VALUES 
 ('中餐'),

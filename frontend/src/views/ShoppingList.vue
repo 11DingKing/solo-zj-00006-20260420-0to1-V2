@@ -1,18 +1,22 @@
 <template>
   <div class="shopping-list">
-    <el-card class="menu-card">
+    <el-card class="list-card">
       <template #header>
         <div class="card-header">
-          <h2>本周菜单</h2>
+          <h2>购物清单</h2>
           <div class="header-actions">
-            <el-button type="primary" @click="exportShoppingList" :disabled="shoppingList.length === 0">
+            <el-button
+              type="primary"
+              @click="exportShoppingList"
+              :disabled="shoppingList.length === 0"
+            >
               <el-icon><Download /></el-icon>
               导出购物清单
             </el-button>
           </div>
         </div>
       </template>
-      
+
       <div v-if="menuRecipes.length === 0" class="empty-state">
         <el-empty description="暂无菜单，请从食谱列表添加食谱到本周菜单">
           <template #image>
@@ -23,7 +27,7 @@
           </el-button>
         </el-empty>
       </div>
-      
+
       <div v-else>
         <el-row :gutter="20">
           <el-col :span="12">
@@ -55,7 +59,7 @@
               </el-table-column>
             </el-table>
           </el-col>
-          
+
           <el-col :span="12">
             <h3>购物清单（已合并食材用量）</h3>
             <el-table :data="shoppingList" border style="width: 100%">
@@ -76,96 +80,96 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { ShoppingCart, Download, Delete } from '@element-plus/icons-vue'
-import { weeklyMenuApi } from '@/api'
+import { ref, onMounted } from "vue";
+import { useRouter } from "vue-router";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { ShoppingCart, Download, Delete } from "@element-plus/icons-vue";
+import { weeklyMenuApi } from "@/api";
 
-const router = useRouter()
+const router = useRouter();
 
-const menuRecipes = ref<any[]>([])
-const shoppingList = ref<any[]>([])
+const menuRecipes = ref<any[]>([]);
+const shoppingList = ref<any[]>([]);
 
 const getWeeklyMenu = async () => {
   try {
-    const res = await weeklyMenuApi.getAll()
-    menuRecipes.value = res.data
+    const res = await weeklyMenuApi.getAll();
+    menuRecipes.value = res.data;
   } catch (error) {
-    console.error('获取本周菜单失败', error)
-    ElMessage.error('获取本周菜单失败')
+    console.error("获取本周菜单失败", error);
+    ElMessage.error("获取本周菜单失败");
   }
-}
+};
 
 const getShoppingList = async () => {
   try {
-    const res = await weeklyMenuApi.getShoppingList()
-    shoppingList.value = res.data
+    const res = await weeklyMenuApi.getShoppingList();
+    shoppingList.value = res.data;
   } catch (error) {
-    console.error('获取购物清单失败', error)
-    ElMessage.error('获取购物清单失败')
+    console.error("获取购物清单失败", error);
+    ElMessage.error("获取购物清单失败");
   }
-}
+};
 
 const removeFromMenu = async (recipeId: number) => {
   try {
-    await ElMessageBox.confirm('确定要从菜单中移除该食谱吗？', '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-    
-    await weeklyMenuApi.remove(recipeId)
-    ElMessage.success('已从菜单中移除')
-    getWeeklyMenu()
-    getShoppingList()
+    await ElMessageBox.confirm("确定要从菜单中移除该食谱吗？", "提示", {
+      confirmButtonText: "确定",
+      cancelButtonText: "取消",
+      type: "warning",
+    });
+
+    await weeklyMenuApi.remove(recipeId);
+    ElMessage.success("已从菜单中移除");
+    getWeeklyMenu();
+    getShoppingList();
   } catch (error: any) {
-    if (error !== 'cancel') {
-      ElMessage.error('移除失败')
+    if (error !== "cancel") {
+      ElMessage.error("移除失败");
     }
   }
-}
+};
 
 const viewRecipe = (id: number) => {
-  router.push(`/recipe/${id}`)
-}
+  router.push(`/recipe/${id}`);
+};
 
 const goToRecipes = () => {
-  router.push('/')
-}
+  router.push("/");
+};
 
 const exportShoppingList = () => {
-  if (shoppingList.value.length === 0) return
-  
-  let content = '=== 购物清单 ===\n\n'
-  content += '已选食谱：\n'
+  if (shoppingList.value.length === 0) return;
+
+  let content = "=== 购物清单 ===\n\n";
+  content += "已选食谱：\n";
   menuRecipes.value.forEach((recipe, index) => {
-    content += `${index + 1}. ${recipe.name}\n`
-  })
-  
-  content += '\n食材清单：\n'
+    content += `${index + 1}. ${recipe.name}\n`;
+  });
+
+  content += "\n食材清单：\n";
   shoppingList.value.forEach((item, index) => {
-    content += `${index + 1}. ${item.name}: ${item.total_amount} ${item.unit_name}\n`
-  })
-  
+    content += `${index + 1}. ${item.name}: ${item.total_amount} ${item.unit_name}\n`;
+  });
+
   // 创建Blob并下载
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `购物清单_${new Date().toISOString().split('T')[0]}.txt`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
-  
-  ElMessage.success('购物清单已导出')
-}
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `购物清单_${new Date().toISOString().split("T")[0]}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+
+  ElMessage.success("购物清单已导出");
+};
 
 onMounted(() => {
-  getWeeklyMenu()
-  getShoppingList()
-})
+  getWeeklyMenu();
+  getShoppingList();
+});
 </script>
 
 <style scoped>
@@ -196,7 +200,183 @@ onMounted(() => {
 h3 {
   margin-bottom: 15px;
   color: #303133;
+  border-left: 4px solid #409eff
+const handleClearPurchased = async () => {
+  try {
+    await ElMessageBox.confirm('确定要清空所有已购买的项目吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    const res = await shoppingListApi.clearPurchased()
+    shoppingItems.value = shoppingItems.value.filter(item => !item.is_purchased)
+    ElMessage.success(res.data.message)
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('清空失败')
+    }
+  }
+}
+
+const handleAddCustom = async () => {
+  if (!addForm.value.name.trim()) {
+    ElMessage.warning('请输入食材名称')
+    return
+  }
+  if (!addForm.value.unit_name.trim()) {
+    ElMessage.warning('请输入单位')
+    return
+  }
+  
+  try {
+    await shoppingListApi.addCustom({
+      name: addForm.value.name.trim(),
+      amount: addForm.value.amount,
+      unit_name: addForm.value.unit_name.trim()
+    })
+    ElMessage.success('已添加到购物清单')
+    addForm.value.name = ''
+    addForm.value.amount = 1
+    addForm.value.unit_name = ''
+    getShoppingList()
+  } catch (error) {
+    console.error('添加失败', error)
+    ElMessage.error('添加失败')
+  }
+}
+
+const goToRecipes = () => {
+  router.push('/')
+}
+
+onMounted(() => {
+  getShoppingList()
+})
+</script>
+
+<style scoped>
+.shopping-list {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.list-card {
+  border-radius: 8px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-header h2 {
+  margin: 0;
+  color: #303133;
+}
+
+.add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 20px;
+  background-color: #f5f7fa;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.add-form .el-form-item {
+  margin-bottom: 0;
+}
+
+.list-content {
+  min-height: 200px;
+}
+
+.empty-state {
+  padding: 40px 0;
+}
+
+.items-section {
+  margin-bottom: 30px;
+}
+
+.section-title {
+  margin-bottom: 15px;
+  color: #303133;
   border-left: 4px solid #409EFF;
   padding-left: 10px;
+  font-size: 16px;
+}
+
+.purchased-title {
+  border-left-color: #909399;
+  color: #909399;
+}
+
+.items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.item-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background-color: #f5f7fa;
+  border-radius: 8px;
+  transition: background-color 0.2s;
+}
+
+.item-card:hover {
+  background-color: #ecf5ff;
+}
+
+.purchased-item {
+  background-color: #fafafa;
+  opacity: 0.7;
+}
+
+.purchased-item:hover {
+  background-color: #f0f0f0;
+}
+
+.item-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.item-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.item-name {
+  font-size: 15px;
+  color: #303133;
+  font-weight: 500;
+}
+
+.purchased-item .item-name {
+  text-decoration: line-through;
+  color: #909399;
+}
+
+.item-amount {
+  font-size: 14px;
+  color: #606266;
+  background-color: #e6e6e6;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.purchased-item .item-amount {
+  text-decoration: line-through;
+  color: #909399;
 }
 </style>

@@ -586,6 +586,287 @@ def get_shopping_list():
         conn.close()
 
 
+# ========== 新购物清单接口 ==========
+
+# 模拟当前用户ID（暂用固定值，后续可扩展登录系统）
+CURRENT_USER_ID = 1
+
+
+@app.route('/api/shopping-list', methods=['GET'])
+def get_shopping_list_v2():
+    """获取当前用户的购物清单（支持按已购/未购筛选）"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'message': '数据库连接失败'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        # 获取查询参数
+        is_purchased = request.args.get('is_purchased', None)
+        
+        # 构建查询条件
+        conditions = ['user_id = %s']
+        params = [CURRENT_USER_ID]
+        
+        if is_purchased is not None:
+            conditions.append('is_purchased = %s')
+            params.append(1 if is_purchased in ['1', 'true', 'True', True] else 0)
+        
+        where_clause = ' AND '.join(conditions)
+        
+        # 查询购物清单
+        query = f'''
+            SELECT id, name, amount, unit_name, is_purchased, recipe_id, created_at
+            FROM shopping_items
+            WHERE {where_clause}
+            ORDER BY is_purchased ASC, created_at DESC
+        '''
+        cursor.execute(query, params)
+        items = cursor.fetchall()
+        
+        # 格式化 amount
+        for item in items:
+            amount = item['amount']
+            if amount == int(amount):
+                item['amount'] = int(amount)
+            else:
+                item['amount'] = round(amount, 2)
+        
+        return jsonify(items)
+    finally:
+        conn.close()
+
+
+@app.route('/api/shopping-list/from-recipe/<int:recipe_id>', methods=['POST'])
+def add_recipe_to_shopping_list(recipe_id):
+    """从食谱一键生成购物清单（把食谱的所有食材加入清单，自动合并相同食材）"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'message': '数据库连接失败'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        # 检查食谱是否存在
+        cursor.execute('SELECT id FROM recipes WHERE id = %s', (recipe_id,))
+        if not cursor.fetchone():
+            return jsonify({'message': '食谱不存在'}), 404
+        
+        # 获取食谱的所有食材
+        cursor.execute('''
+            SELECT i.name, i.amount, u.name as unit_name
+            FROM ingredients i
+            JOIN units u ON i.unit_id = u.id
+            WHERE i.recipe_id = %s
+        ''', (recipe_id,))
+        ingredients = cursor.fetchall()
+        
+        if not ingredients:
+            return jsonify({'message': '该食谱没有食材'}), 400
+        
+        added_count = 0
+        merged_count = 0
+        
+        for ing in ingredients:
+            # 检查是否已存在相同名称和单位的未购买食材
+            cursor.execute('''
+                SELECT id, amount FROM shopping_items
+                WHERE user_id = %s AND name = %s AND unit_name = %s AND is_purchased = 0
+            ''', (CURRENT_USER_ID, ing['name'], ing['unit_name']))
+            existing_item = cursor.fetchone()
+            
+            if existing_item:
+                # 合并数量
+                new_amount = existing_item['amount'] + ing['amount']
+                cursor.execute('''
+                    UPDATE shopping_items SET amount = %s WHERE id = %s
+                ''', (new_amount, existing_item['id']))
+                merged_count += 1
+            else:
+                # 新增清单项
+                cursor.execute('''
+                    INSERT INTO shopping_items (user_id, name, amount, unit_name, recipe_id, is_purchased)
+                    VALUES (%s, %s, %s, %s, %s, 0)
+                ''', (CURRENT_USER_ID, ing['name'], ing['amount'], ing['unit_name'], recipe_id))
+                added_count += 1
+        
+        conn.commit()
+        
+        return jsonify({
+            'message': '已加入购物清单',
+            'added_count': added_count,
+            'merged_count': merged_count
+        }), 201
+    except Error as e:
+        conn.rollback()
+        return jsonify({'message': f'加入购物清单失败: {str(e)}'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/shopping-list/add', methods=['POST'])
+@validate_request(
+    required_fields=['name', 'amount', 'unit_name'],
+    field_types={
+        'name': str,
+        'amount': (int, float),
+        'unit_name': str
+    }
+)
+def add_custom_item(validated_data):
+    """手动添加自定义清单项"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'message': '数据库连接失败'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        name = validated_data.get('name', '').strip()
+        amount = validated_data.get('amount')
+        unit_name = validated_data.get('unit_name', '').strip()
+        
+        if not name:
+            return jsonify({'message': '食材名称不能为空'}), 400
+        if amount <= 0:
+            return jsonify({'message': '用量必须大于0'}), 400
+        if not unit_name:
+            return jsonify({'message': '单位不能为空'}), 400
+        
+        # 检查是否已存在相同名称和单位的未购买食材
+        cursor.execute('''
+            SELECT id, amount FROM shopping_items
+            WHERE user_id = %s AND name = %s AND unit_name = %s AND is_purchased = 0
+        ''', (CURRENT_USER_ID, name, unit_name))
+        existing_item = cursor.fetchone()
+        
+        if existing_item:
+            # 合并数量
+            new_amount = existing_item['amount'] + amount
+            cursor.execute('''
+                UPDATE shopping_items SET amount = %s WHERE id = %s
+            ''', (new_amount, existing_item['id']))
+            conn.commit()
+            return jsonify({
+                'message': '已添加到购物清单（合并数量）',
+                'id': existing_item['id']
+            })
+        else:
+            # 新增清单项
+            cursor.execute('''
+                INSERT INTO shopping_items (user_id, name, amount, unit_name, is_purchased)
+                VALUES (%s, %s, %s, %s, 0)
+            ''', (CURRENT_USER_ID, name, amount, unit_name))
+            conn.commit()
+            return jsonify({
+                'message': '已添加到购物清单',
+                'id': cursor.lastrowid
+            }), 201
+    except Error as e:
+        conn.rollback()
+        return jsonify({'message': f'添加失败: {str(e)}'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/shopping-items/<int:item_id>/toggle', methods=['PUT'])
+def toggle_item_purchased(item_id):
+    """勾选/取消勾选已购买状态"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'message': '数据库连接失败'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        # 检查清单项是否存在
+        cursor.execute('''
+            SELECT id, is_purchased FROM shopping_items
+            WHERE id = %s AND user_id = %s
+        ''', (item_id, CURRENT_USER_ID))
+        item = cursor.fetchone()
+        
+        if not item:
+            return jsonify({'message': '清单项不存在'}), 404
+        
+        # 切换状态
+        new_status = 0 if item['is_purchased'] else 1
+        cursor.execute('''
+            UPDATE shopping_items SET is_purchased = %s WHERE id = %s
+        ''', (new_status, item_id))
+        conn.commit()
+        
+        return jsonify({
+            'message': '状态已更新',
+            'is_purchased': bool(new_status)
+        })
+    except Error as e:
+        conn.rollback()
+        return jsonify({'message': f'更新失败: {str(e)}'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/shopping-items/<int:item_id>', methods=['DELETE'])
+def delete_shopping_item(item_id):
+    """删除清单项"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'message': '数据库连接失败'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        # 检查清单项是否存在
+        cursor.execute('''
+            SELECT id FROM shopping_items
+            WHERE id = %s AND user_id = %s
+        ''', (item_id, CURRENT_USER_ID))
+        if not cursor.fetchone():
+            return jsonify({'message': '清单项不存在'}), 404
+        
+        # 删除
+        cursor.execute('DELETE FROM shopping_items WHERE id = %s', (item_id,))
+        conn.commit()
+        
+        return jsonify({'message': '已删除'})
+    except Error as e:
+        conn.rollback()
+        return jsonify({'message': f'删除失败: {str(e)}'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/shopping-list/purchased', methods=['DELETE'])
+def clear_purchased_items():
+    """清空已购买项"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'message': '数据库连接失败'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        # 删除已购买的项
+        cursor.execute('''
+            DELETE FROM shopping_items
+            WHERE user_id = %s AND is_purchased = 1
+        ''', (CURRENT_USER_ID,))
+        deleted_count = cursor.rowcount
+        conn.commit()
+        
+        return jsonify({
+            'message': f'已清空 {deleted_count} 项已购商品',
+            'deleted_count': deleted_count
+        })
+    except Error as e:
+        conn.rollback()
+        return jsonify({'message': f'清空失败: {str(e)}'}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/weekly-menu/<int:recipe_id>', methods=['DELETE'])
 def remove_from_weekly_menu(recipe_id):
     """从本周菜单移除食谱"""

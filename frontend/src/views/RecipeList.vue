@@ -112,11 +112,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Clock } from '@element-plus/icons-vue'
 import { categoryApi, difficultyApi, recipeApi, weeklyMenuApi } from '@/api'
+
+let searchTimer: any = null
+const DEBOUNCE_DELAY = 300
 
 const router = useRouter()
 
@@ -234,6 +237,21 @@ const getDifficultyTagType = (level: number) => {
       return 'info'
   }
 }
+
+watch(
+  () => searchForm.name,
+  (newValue, oldValue) => {
+    if (searchTimer) {
+      clearTimeout(searchTimer)
+    }
+    searchTimer = setTimeout(() => {
+      if (newValue !== oldValue) {
+        currentPage.value = 1
+        getRecipes()
+      }
+    }, DEBOUNCE_DELAY)
+  }
+)
 
 onMounted(() => {
   getCategories()
