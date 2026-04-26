@@ -1,6 +1,7 @@
 import os
 import json
 import functools
+import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import mysql.connector
@@ -9,11 +10,9 @@ from mysql.connector import Error
 app = Flask(__name__)
 CORS(app)
 
-# 确保 JSON 响应使用 UTF-8 编码，不转义中文字符
 app.config['JSON_AS_ASCII'] = False
 app.config['JSON_SORT_KEYS'] = False
 
-# 数据库配置
 DB_CONFIG = {
     'host': os.getenv('MYSQL_HOST', 'localhost'),
     'port': int(os.getenv('MYSQL_PORT', 3306)),
@@ -24,18 +23,31 @@ DB_CONFIG = {
     'use_unicode': True
 }
 
+MAX_RETRIES = 30
+RETRY_INTERVAL = 2
+
 
 def get_db_connection():
-    """获取数据库连接"""
-    try:
-        connection = mysql.connector.connect(**DB_CONFIG)
-        return connection
-    except Error as e:
-        print(f"数据库连接错误: {e}")
-        return None
+    """获取数据库连接（带重试机制）"""
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            connection = mysql.connector.connect(**DB_CONFIG)
+            if attempt > 0:
+                print(f"[DB] 数据库连接成功（第 {attempt + 1} 次尝试）")
+            return connection
+        except Error as e:
+            last_error = e
+            if attempt == 0:
+                print(f"[DB] 首次连接失败: {str(e)}")
+                print(f"[DB] 数据库配置: host={DB_CONFIG['host']}, port={DB_CONFIG['port']}, database={DB_CONFIG['database']}")
+            print(f"[DB] 等待 {RETRY_INTERVAL} 秒后重试...（第 {attempt + 1}/{MAX_RETRIES} 次）")
+            time.sleep(RETRY_INTERVAL)
+    
+    print(f"[DB] 数据库连接失败，已重试 {MAX_RETRIES} 次。最后错误: {str(last_error)}")
+    return None
 
 
-# 错误处理装饰器
 def validate_request(required_fields=None, field_types=None):
     """请求参数校验装饰器"""
     def decorator(func):
@@ -46,13 +58,11 @@ def validate_request(required_fields=None, field_types=None):
                 if not data:
                     return jsonify({'message': '请求体不能为空'}), 400
                 
-                # 校验必填字段
                 if required_fields:
                     for field in required_fields:
                         if field not in data or data[field] is None:
                             return jsonify({'message': f'缺少必填字段: {field}'}), 400
                 
-                # 校验字段类型
                 if field_types:
                     for field, field_type in field_types.items():
                         if field in data and data[field] is not None:
@@ -60,76 +70,82 @@ def validate_request(required_fields=None, field_types=None):
                                 type_name = field_type.__name__
                                 return jsonify({'message': f'字段 {field} 类型错误，应为 {type_name}'}), 400
                 
-                # 将校验后的数据传递给视图函数
                 kwargs['validated_data'] = data
             return func(*args, **kwargs)
         return wrapper
     return decorator
 
 
-# 分类相关接口
 @app.route('/api/categories', methods=['GET'])
 def get_categories():
     """获取所有分类"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         cursor.execute('SELECT id, name FROM categories ORDER BY id')
         categories = cursor.fetchall()
         return jsonify(categories)
+    except Error as e:
+        print(f"[ERROR] get_categories SQL错误: {str(e)}")
+        return jsonify({'message': f'查询分类失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
-# 难度相关接口
 @app.route('/api/difficulties', methods=['GET'])
 def get_difficulties():
     """获取所有难度"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         cursor.execute('SELECT id, name, level FROM difficulties ORDER BY level')
         difficulties = cursor.fetchall()
         return jsonify(difficulties)
+    except Error as e:
+        print(f"[ERROR] get_difficulties SQL错误: {str(e)}")
+        return jsonify({'message': f'查询难度失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
-# 单位相关接口
 @app.route('/api/units', methods=['GET'])
 def get_units():
     """获取所有单位"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         cursor.execute('SELECT id, name FROM units ORDER BY id')
         units = cursor.fetchall()
         return jsonify(units)
+    except Error as e:
+        print(f"[ERROR] get_units SQL错误: {str(e)}")
+        return jsonify({'message': f'查询单位失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
-# 食谱相关接口
 @app.route('/api/recipes', methods=['GET'])
 def get_recipes():
     """获取食谱列表（分页+筛选）"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 获取查询参数
         page = request.args.get('page', 1, type=int)
         page_size = request.args.get('page_size', 12, type=int)
         name = request.args.get('name', '')
@@ -137,7 +153,6 @@ def get_recipes():
         difficulty_id = request.args.get('difficulty_id', None, type=int)
         max_cooking_time = request.args.get('max_cooking_time', None, type=int)
         
-        # 构建查询条件
         conditions = []
         params = []
         
@@ -156,7 +171,6 @@ def get_recipes():
         
         where_clause = ' AND '.join(conditions) if conditions else '1=1'
         
-        # 查询总数
         count_query = f'''
             SELECT COUNT(*) as total 
             FROM recipes r 
@@ -165,7 +179,6 @@ def get_recipes():
         cursor.execute(count_query, params)
         total = cursor.fetchone()['total']
         
-        # 分页查询
         offset = (page - 1) * page_size
         query = f'''
             SELECT r.*, 
@@ -188,8 +201,12 @@ def get_recipes():
             'page': page,
             'page_size': page_size
         })
+    except Error as e:
+        print(f"[ERROR] get_recipes SQL错误: {str(e)}")
+        return jsonify({'message': f'查询食谱列表失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/recipes/<int:recipe_id>', methods=['GET'])
@@ -197,12 +214,11 @@ def get_recipe_detail(recipe_id):
     """获取食谱详情"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 查询食谱基本信息
         query = '''
             SELECT r.*, 
                    c.name as category_name,
@@ -219,7 +235,6 @@ def get_recipe_detail(recipe_id):
         if not recipe:
             return jsonify({'message': '食谱不存在'}), 404
         
-        # 查询食材
         cursor.execute('''
             SELECT i.*, u.name as unit_name
             FROM ingredients i
@@ -232,8 +247,12 @@ def get_recipe_detail(recipe_id):
         recipe['ingredients'] = ingredients
         
         return jsonify(recipe)
+    except Error as e:
+        print(f"[ERROR] get_recipe_detail SQL错误: {str(e)}")
+        return jsonify({'message': f'查询食谱详情失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/recipes', methods=['POST'])
@@ -253,12 +272,11 @@ def create_recipe(validated_data):
     """创建食谱"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 额外的参数校验
         name = validated_data.get('name', '').strip()
         if not name or len(name) > 100:
             return jsonify({'message': '菜名不能为空且长度不能超过100个字符'}), 400
@@ -271,7 +289,6 @@ def create_recipe(validated_data):
         if not ingredients or len(ingredients) == 0:
             return jsonify({'message': '食谱至少需要一个食材'}), 400
         
-        # 校验分类和难度是否存在
         cursor.execute('SELECT id FROM categories WHERE id = %s', (validated_data['category_id'],))
         if not cursor.fetchone():
             return jsonify({'message': '分类不存在'}), 400
@@ -280,7 +297,6 @@ def create_recipe(validated_data):
         if not cursor.fetchone():
             return jsonify({'message': '难度不存在'}), 400
         
-        # 校验食材
         for idx, ing in enumerate(ingredients):
             if not ing.get('name') or not ing.get('name').strip():
                 return jsonify({'message': f'第 {idx + 1} 个食材名称不能为空'}), 400
@@ -289,16 +305,13 @@ def create_recipe(validated_data):
             if not ing.get('unit_id'):
                 return jsonify({'message': f'第 {idx + 1} 个食材请选择单位'}), 400
             
-            # 校验单位是否存在
             cursor.execute('SELECT id FROM units WHERE id = %s', (ing['unit_id'],))
             if not cursor.fetchone():
                 return jsonify({'message': f'第 {idx + 1} 个食材单位不存在'}), 400
         
-        # 准备步骤数据
         steps = validated_data.get('steps', [])
         steps_json = json.dumps([s.strip() for s in steps if s and s.strip()], ensure_ascii=False) if steps else None
         
-        # 插入食谱
         insert_recipe_query = '''
             INSERT INTO recipes (name, category_id, difficulty_id, cooking_time, cover_url, steps)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -314,7 +327,6 @@ def create_recipe(validated_data):
         
         recipe_id = cursor.lastrowid
         
-        # 插入食材
         insert_ingredient_query = '''
             INSERT INTO ingredients (recipe_id, name, amount, unit_id)
             VALUES (%s, %s, %s, %s)
@@ -335,9 +347,11 @@ def create_recipe(validated_data):
         }), 201
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] create_recipe SQL错误: {str(e)}")
         return jsonify({'message': f'创建食谱失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/recipes/<int:recipe_id>', methods=['PUT'])
@@ -357,17 +371,15 @@ def update_recipe(recipe_id, validated_data):
     """更新食谱"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 检查食谱是否存在
         cursor.execute('SELECT id FROM recipes WHERE id = %s', (recipe_id,))
         if not cursor.fetchone():
             return jsonify({'message': '食谱不存在'}), 404
         
-        # 额外的参数校验
         name = validated_data.get('name', '').strip()
         if not name or len(name) > 100:
             return jsonify({'message': '菜名不能为空且长度不能超过100个字符'}), 400
@@ -380,7 +392,6 @@ def update_recipe(recipe_id, validated_data):
         if not ingredients or len(ingredients) == 0:
             return jsonify({'message': '食谱至少需要一个食材'}), 400
         
-        # 校验分类和难度是否存在
         cursor.execute('SELECT id FROM categories WHERE id = %s', (validated_data['category_id'],))
         if not cursor.fetchone():
             return jsonify({'message': '分类不存在'}), 400
@@ -389,7 +400,6 @@ def update_recipe(recipe_id, validated_data):
         if not cursor.fetchone():
             return jsonify({'message': '难度不存在'}), 400
         
-        # 校验食材
         for idx, ing in enumerate(ingredients):
             if not ing.get('name') or not ing.get('name').strip():
                 return jsonify({'message': f'第 {idx + 1} 个食材名称不能为空'}), 400
@@ -398,16 +408,13 @@ def update_recipe(recipe_id, validated_data):
             if not ing.get('unit_id'):
                 return jsonify({'message': f'第 {idx + 1} 个食材请选择单位'}), 400
             
-            # 校验单位是否存在
             cursor.execute('SELECT id FROM units WHERE id = %s', (ing['unit_id'],))
             if not cursor.fetchone():
                 return jsonify({'message': f'第 {idx + 1} 个食材单位不存在'}), 400
         
-        # 准备步骤数据
         steps = validated_data.get('steps', [])
         steps_json = json.dumps([s.strip() for s in steps if s and s.strip()], ensure_ascii=False) if steps else None
         
-        # 更新食谱
         update_recipe_query = '''
             UPDATE recipes 
             SET name = %s, category_id = %s, difficulty_id = %s, 
@@ -424,10 +431,8 @@ def update_recipe(recipe_id, validated_data):
             recipe_id
         ))
         
-        # 删除旧食材
         cursor.execute('DELETE FROM ingredients WHERE recipe_id = %s', (recipe_id,))
         
-        # 插入新食材
         insert_ingredient_query = '''
             INSERT INTO ingredients (recipe_id, name, amount, unit_id)
             VALUES (%s, %s, %s, %s)
@@ -448,9 +453,11 @@ def update_recipe(recipe_id, validated_data):
         })
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] update_recipe SQL错误: {str(e)}")
         return jsonify({'message': f'更新食谱失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/recipes/<int:recipe_id>', methods=['DELETE'])
@@ -458,35 +465,34 @@ def delete_recipe(recipe_id):
     """删除食谱"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor()
         
-        # 检查食谱是否存在
         cursor.execute('SELECT id FROM recipes WHERE id = %s', (recipe_id,))
         if not cursor.fetchone():
             return jsonify({'message': '食谱不存在'}), 404
         
-        # 删除食谱（会级联删除食材和菜单关联）
         cursor.execute('DELETE FROM recipes WHERE id = %s', (recipe_id,))
         conn.commit()
         
         return jsonify({'message': '食谱删除成功'})
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] delete_recipe SQL错误: {str(e)}")
         return jsonify({'message': f'删除食谱失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
-# 本周菜单相关接口
 @app.route('/api/weekly-menu', methods=['GET'])
 def get_weekly_menu():
     """获取本周菜单"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
@@ -504,8 +510,12 @@ def get_weekly_menu():
         menu_items = cursor.fetchall()
         
         return jsonify(menu_items)
+    except Error as e:
+        print(f"[ERROR] get_weekly_menu SQL错误: {str(e)}")
+        return jsonify({'message': f'查询本周菜单失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/weekly-menu', methods=['POST'])
@@ -517,33 +527,32 @@ def add_to_weekly_menu(validated_data):
     """添加食谱到本周菜单"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
         recipe_id = validated_data['recipe_id']
         
-        # 检查食谱是否存在
         cursor.execute('SELECT id FROM recipes WHERE id = %s', (recipe_id,))
         if not cursor.fetchone():
             return jsonify({'message': '食谱不存在'}), 404
         
-        # 检查是否已在菜单中
         cursor.execute('SELECT id FROM weekly_menu WHERE recipe_id = %s', (recipe_id,))
         if cursor.fetchone():
             return jsonify({'message': '食谱已在菜单中'}), 400
         
-        # 添加到菜单
         cursor.execute('INSERT INTO weekly_menu (recipe_id) VALUES (%s)', (recipe_id,))
         conn.commit()
         
         return jsonify({'message': '已添加到本周菜单'}), 201
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] add_to_weekly_menu SQL错误: {str(e)}")
         return jsonify({'message': f'添加到菜单失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/weekly-menu/shopping-list', methods=['GET'])
@@ -551,12 +560,11 @@ def get_shopping_list():
     """获取购物清单（合并同名食材用量）"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 查询所有菜单中的食谱食材，并按食材名称和单位分组汇总
         query = '''
             SELECT 
                 i.name,
@@ -572,9 +580,7 @@ def get_shopping_list():
         cursor.execute(query)
         shopping_list = cursor.fetchall()
         
-        # 格式化total_amount
         for item in shopping_list:
-            # 如果是整数，显示为整数，否则保留两位小数
             amount = item['total_amount']
             if amount == int(amount):
                 item['total_amount'] = int(amount)
@@ -582,13 +588,14 @@ def get_shopping_list():
                 item['total_amount'] = round(amount, 2)
         
         return jsonify(shopping_list)
+    except Error as e:
+        print(f"[ERROR] get_shopping_list SQL错误: {str(e)}")
+        return jsonify({'message': f'查询购物清单失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
-# ========== 新购物清单接口 ==========
-
-# 模拟当前用户ID（暂用固定值，后续可扩展登录系统）
 CURRENT_USER_ID = 1
 
 
@@ -597,15 +604,13 @@ def get_shopping_list_v2():
     """获取当前用户的购物清单（支持按已购/未购筛选）"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 获取查询参数
         is_purchased = request.args.get('is_purchased', None)
         
-        # 构建查询条件
         conditions = ['user_id = %s']
         params = [CURRENT_USER_ID]
         
@@ -615,7 +620,6 @@ def get_shopping_list_v2():
         
         where_clause = ' AND '.join(conditions)
         
-        # 查询购物清单
         query = f'''
             SELECT id, name, amount, unit_name, is_purchased, recipe_id, created_at
             FROM shopping_items
@@ -625,7 +629,6 @@ def get_shopping_list_v2():
         cursor.execute(query, params)
         items = cursor.fetchall()
         
-        # 格式化 amount
         for item in items:
             amount = item['amount']
             if amount == int(amount):
@@ -634,26 +637,28 @@ def get_shopping_list_v2():
                 item['amount'] = round(amount, 2)
         
         return jsonify(items)
+    except Error as e:
+        print(f"[ERROR] get_shopping_list_v2 SQL错误: {str(e)}")
+        return jsonify({'message': f'查询购物清单失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/shopping-list/from-recipe/<int:recipe_id>', methods=['POST'])
 def add_recipe_to_shopping_list(recipe_id):
-    """从食谱一键生成购物清单（把食谱的所有食材加入清单，自动合并相同食材）"""
+    """从食谱一键生成购物清单"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 检查食谱是否存在
         cursor.execute('SELECT id FROM recipes WHERE id = %s', (recipe_id,))
         if not cursor.fetchone():
             return jsonify({'message': '食谱不存在'}), 404
         
-        # 获取食谱的所有食材
         cursor.execute('''
             SELECT i.name, i.amount, u.name as unit_name
             FROM ingredients i
@@ -669,7 +674,6 @@ def add_recipe_to_shopping_list(recipe_id):
         merged_count = 0
         
         for ing in ingredients:
-            # 检查是否已存在相同名称和单位的未购买食材
             cursor.execute('''
                 SELECT id, amount FROM shopping_items
                 WHERE user_id = %s AND name = %s AND unit_name = %s AND is_purchased = 0
@@ -677,14 +681,12 @@ def add_recipe_to_shopping_list(recipe_id):
             existing_item = cursor.fetchone()
             
             if existing_item:
-                # 合并数量
                 new_amount = existing_item['amount'] + ing['amount']
                 cursor.execute('''
                     UPDATE shopping_items SET amount = %s WHERE id = %s
                 ''', (new_amount, existing_item['id']))
                 merged_count += 1
             else:
-                # 新增清单项
                 cursor.execute('''
                     INSERT INTO shopping_items (user_id, name, amount, unit_name, recipe_id, is_purchased)
                     VALUES (%s, %s, %s, %s, %s, 0)
@@ -700,9 +702,11 @@ def add_recipe_to_shopping_list(recipe_id):
         }), 201
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] add_recipe_to_shopping_list SQL错误: {str(e)}")
         return jsonify({'message': f'加入购物清单失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/shopping-list/add', methods=['POST'])
@@ -718,7 +722,7 @@ def add_custom_item(validated_data):
     """手动添加自定义清单项"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
@@ -734,7 +738,6 @@ def add_custom_item(validated_data):
         if not unit_name:
             return jsonify({'message': '单位不能为空'}), 400
         
-        # 检查是否已存在相同名称和单位的未购买食材
         cursor.execute('''
             SELECT id, amount FROM shopping_items
             WHERE user_id = %s AND name = %s AND unit_name = %s AND is_purchased = 0
@@ -742,7 +745,6 @@ def add_custom_item(validated_data):
         existing_item = cursor.fetchone()
         
         if existing_item:
-            # 合并数量
             new_amount = existing_item['amount'] + amount
             cursor.execute('''
                 UPDATE shopping_items SET amount = %s WHERE id = %s
@@ -753,7 +755,6 @@ def add_custom_item(validated_data):
                 'id': existing_item['id']
             })
         else:
-            # 新增清单项
             cursor.execute('''
                 INSERT INTO shopping_items (user_id, name, amount, unit_name, is_purchased)
                 VALUES (%s, %s, %s, %s, 0)
@@ -765,9 +766,11 @@ def add_custom_item(validated_data):
             }), 201
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] add_custom_item SQL错误: {str(e)}")
         return jsonify({'message': f'添加失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/shopping-items/<int:item_id>/toggle', methods=['PUT'])
@@ -775,12 +778,11 @@ def toggle_item_purchased(item_id):
     """勾选/取消勾选已购买状态"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 检查清单项是否存在
         cursor.execute('''
             SELECT id, is_purchased FROM shopping_items
             WHERE id = %s AND user_id = %s
@@ -790,7 +792,6 @@ def toggle_item_purchased(item_id):
         if not item:
             return jsonify({'message': '清单项不存在'}), 404
         
-        # 切换状态
         new_status = 0 if item['is_purchased'] else 1
         cursor.execute('''
             UPDATE shopping_items SET is_purchased = %s WHERE id = %s
@@ -803,9 +804,11 @@ def toggle_item_purchased(item_id):
         })
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] toggle_item_purchased SQL错误: {str(e)}")
         return jsonify({'message': f'更新失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/shopping-items/<int:item_id>', methods=['DELETE'])
@@ -813,12 +816,11 @@ def delete_shopping_item(item_id):
     """删除清单项"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 检查清单项是否存在
         cursor.execute('''
             SELECT id FROM shopping_items
             WHERE id = %s AND user_id = %s
@@ -826,16 +828,17 @@ def delete_shopping_item(item_id):
         if not cursor.fetchone():
             return jsonify({'message': '清单项不存在'}), 404
         
-        # 删除
         cursor.execute('DELETE FROM shopping_items WHERE id = %s', (item_id,))
         conn.commit()
         
         return jsonify({'message': '已删除'})
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] delete_shopping_item SQL错误: {str(e)}")
         return jsonify({'message': f'删除失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/shopping-list/purchased', methods=['DELETE'])
@@ -843,12 +846,11 @@ def clear_purchased_items():
     """清空已购买项"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # 删除已购买的项
         cursor.execute('''
             DELETE FROM shopping_items
             WHERE user_id = %s AND is_purchased = 1
@@ -862,9 +864,11 @@ def clear_purchased_items():
         })
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] clear_purchased_items SQL错误: {str(e)}")
         return jsonify({'message': f'清空失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/weekly-menu/<int:recipe_id>', methods=['DELETE'])
@@ -872,34 +876,42 @@ def remove_from_weekly_menu(recipe_id):
     """从本周菜单移除食谱"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'message': '数据库连接失败'}), 500
+        return jsonify({'message': '数据库连接失败，请稍后重试'}), 500
     
     try:
         cursor = conn.cursor()
         
-        # 检查是否在菜单中
         cursor.execute('SELECT id FROM weekly_menu WHERE recipe_id = %s', (recipe_id,))
         if not cursor.fetchone():
             return jsonify({'message': '食谱不在菜单中'}), 404
         
-        # 从菜单移除
         cursor.execute('DELETE FROM weekly_menu WHERE recipe_id = %s', (recipe_id,))
         conn.commit()
         
         return jsonify({'message': '已从菜单中移除'})
     except Error as e:
         conn.rollback()
+        print(f"[ERROR] remove_from_weekly_menu SQL错误: {str(e)}")
         return jsonify({'message': f'从菜单移除失败: {str(e)}'}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
-# 健康检查接口
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """健康检查"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'status': 'error', 'message': '数据库连接失败'}), 500
+    conn.close()
     return jsonify({'status': 'ok', 'message': '服务运行正常'})
 
 
 if __name__ == '__main__':
+    print(f"[INIT] 启动 Flask 应用，数据库配置:")
+    print(f"  host: {DB_CONFIG['host']}")
+    print(f"  port: {DB_CONFIG['port']}")
+    print(f"  database: {DB_CONFIG['database']}")
+    print(f"  user: {DB_CONFIG['user']}")
     app.run(host='0.0.0.0', port=5000, debug=True)
