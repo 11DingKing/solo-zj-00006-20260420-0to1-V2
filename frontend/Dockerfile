@@ -8,7 +8,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # 安装依赖
-RUN npm install
+RUN npm config set registry https://registry.npmmirror.com && npm install
 
 # 复制所有文件
 COPY . .
